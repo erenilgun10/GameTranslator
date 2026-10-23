@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "game-translator"
-version = "0.2.0a1"
+version = "0.3.0a1"
 description = "Safe, reversible RPG Maker MV/MZ file translation"
 readme = "README.md"
 requires-python = ">=3.12"

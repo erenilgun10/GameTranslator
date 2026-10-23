@@ -33,11 +33,16 @@ class ProtectedText:
         return translated
 
 
-def protect(text: str) -> ProtectedText:
+def protect(text: str, glossary=None) -> ProtectedText:
     if MARKER.search(text):
         raise ValueError("Source collides with reserved placeholders")
     values = []
+    glossary = glossary or {}
+    pattern = TOKEN
+    if glossary:
+        terms = "|".join(re.escape(term) for term in sorted(glossary, key=len, reverse=True))
+        pattern = re.compile(TOKEN.pattern + "|(?<!\\w)(?:" + terms + ")(?!\\w)")
     def replace(match):
-        values.append(match.group())
+        values.append(glossary.get(match.group(), match.group()))
         return f"__GT_{len(values) - 1:05d}__"
-    return ProtectedText(TOKEN.sub(replace, text), values)
+    return ProtectedText(pattern.sub(replace, text), values)

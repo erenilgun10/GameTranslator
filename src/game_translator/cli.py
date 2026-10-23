@@ -5,6 +5,8 @@ from pathlib import Path
 from . import __version__
 from .adapters import scan
 from .storage import Project
+from .jobs import create_job, job_report, run_job
+from .providers import DeepLProvider, ProviderError
 
 
 def main(argv=None):
@@ -26,6 +28,17 @@ def main(argv=None):
     editor.add_argument("text")
     editor.add_argument("--reviewed", action="store_true")
     editor.add_argument("--lock", action="store_true")
+    glossary = commands.add_parser("glossary", help="Add an approved target-language term")
+    glossary.add_argument("project", type=Path)
+    glossary.add_argument("term")
+    glossary.add_argument("translation")
+    translator = commands.add_parser("translate", help="Create/resume a DeepL batch job")
+    translator.add_argument("project", type=Path)
+    translator.add_argument("--job", help="Resume an existing job ID")
+    translator.add_argument("--allow-cloud", action="store_true", help="Consent to sending text to DeepL; charges may apply")
+    translator.add_argument("--batch-size", type=int, default=20)
+    jobs = commands.add_parser("jobs", help="Show job checkpoints and errors")
+    jobs.add_argument("project", type=Path)
     commands.add_parser("gui", help="Open desktop application")
     args = parser.parse_args(argv)
     try:
@@ -38,18 +51,39 @@ def main(argv=None):
             project = Project.create(args.project, scan(args.game), args.source, args.target)
             print(json.dumps(project.progress()))
             project.close()
-        elif args.command in ("status", "edit"):
+        elif args.command in ("status", "edit", "glossary", "translate", "jobs"):
             project = Project(args.project)
             try:
                 if args.command == "edit":
                     project.save_translation(args.segment_id, args.text, reviewed=args.reviewed, locked=args.lock)
+                elif args.command == "glossary":
+                    project.set_glossary(args.term, args.translation)
+                    print(json.dumps(project.glossary(), ensure_ascii=False))
+                    return
+                elif args.command == "translate":
+                    if not args.allow_cloud:
+                        raise ValueError("Use --allow-cloud to consent to DeepL data transfer and possible charges")
+                    provider = DeepLProvider()
+                    provider.validate_configuration()
+                    job_id = args.job or create_job(project)
+                    print(f"Job: {job_id}")
+                    try:
+                        result = run_job(project, job_id, provider, batch_size=args.batch_size)
+                    except KeyboardInterrupt:
+                        print("Interrupted; resume with --job " + job_id)
+                        return
+                    print(json.dumps(result, ensure_ascii=False, indent=2))
+                    return
+                elif args.command == "jobs":
+                    print(json.dumps([job_report(project, r[0]) for r in project.db.execute("SELECT id FROM jobs WHERE target=?", (project.target,))], ensure_ascii=False, indent=2))
+                    return
                 print(json.dumps({"progress": project.progress(), "segments": [
                     {"id": s.id, "source": s.text, "context": s.context,
                      "translation": dict(project.translation(s.id)) if project.translation(s.id) else None}
                     for s in project.segments()]}, ensure_ascii=False, indent=2))
             finally:
                 project.close()
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, ProviderError) as exc:
         parser.exit(1, f"Error: {exc}\n")
 
 

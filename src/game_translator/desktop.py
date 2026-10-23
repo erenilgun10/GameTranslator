@@ -2,13 +2,14 @@ import queue
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .adapters import scan
 from .models import ScanReport, SourceFile
 from .providers import DeepLProvider
 from .storage import Project
 from .tokens import protect
+from .jobs import create_job, run_job
 
 
 class Desktop:
@@ -20,6 +21,8 @@ class Desktop:
         self.events = queue.Queue()
         self.report = None
         self.project = None
+        self.busy = False
+        self.cancel_job = threading.Event()
         bar = ttk.Frame(root, padding=12)
         bar.pack(fill="x")
         self.scan_button = ttk.Button(bar, text="Oyun seç ve tara / Scan game", command=self.select_game)
@@ -45,6 +48,18 @@ class Desktop:
         scroll.pack(side="right", fill="y")
         self.table.pack(fill="both", expand=True)
         self.table.bind("<<TreeviewSelect>>", self.select_segment)
+        filters = ttk.Frame(root, padding=(12, 0))
+        filters.pack(fill="x")
+        ttk.Label(filters, text="Filtre / Filter").pack(side="left")
+        self.filter_text = tk.StringVar()
+        self.filter_text.trace_add("write", lambda *_: self.show_report() if self.report else None)
+        ttk.Entry(filters, textvariable=self.filter_text).pack(side="left", fill="x", expand=True, padx=6)
+        self.filter_status = tk.StringVar(value="All")
+        options = ttk.Combobox(filters, textvariable=self.filter_status, values=("All", "Pending", "Translated", "Reviewed", "Locked"), state="readonly", width=14)
+        options.pack(side="left")
+        options.bind("<<ComboboxSelected>>", lambda _: self.show_report() if self.report else None)
+        ttk.Button(filters, text="Glossary", command=self.edit_glossary).pack(side="left", padx=4)
+        ttk.Button(filters, text="Geçmiş / History", command=self.show_history).pack(side="left")
         editor = ttk.Frame(root, padding=12)
         editor.pack(fill="x")
         ttk.Label(editor, text="Çeviri / Translation").pack(anchor="w")
@@ -58,17 +73,22 @@ class Desktop:
         ttk.Checkbutton(actions, text="Otomatik çeviriye kilitli / Locked", variable=self.locked).pack(side="left")
         ttk.Button(actions, text="Kaydet / Save", command=self.save).pack(side="left", padx=8)
         ttk.Button(actions, text="DeepL ile çevir / Translate", command=self.translate_selected).pack(side="left")
+        ttk.Button(actions, text="Toplu başlat/devam / Batch", command=self.start_job).pack(side="left", padx=4)
+        ttk.Button(actions, text="Duraklat / Pause", command=self.cancel_job.set).pack(side="left")
         self.details = tk.StringVar(value="")
         ttk.Label(editor, textvariable=self.details, wraplength=1000).pack(fill="x")
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self.poll)
 
     def close(self):
+        self.cancel_job.set()
         if self.project:
             self.project.close()
         self.root.destroy()
 
     def new_project(self):
+        if self.busy:
+            return
         if not self.report:
             messagebox.showinfo("GameTranslator", "Önce oyun tara / Scan a game first")
             return
@@ -84,6 +104,8 @@ class Desktop:
                 messagebox.showerror("GameTranslator", str(exc))
 
     def open_project(self):
+        if self.busy:
+            return
         directory = filedialog.askdirectory(title="Proje klasörü / Project directory")
         if directory:
             try:
@@ -127,6 +149,8 @@ class Desktop:
             messagebox.showerror("GameTranslator", str(exc))
 
     def translate_selected(self):
+        if self.busy:
+            return
         selected = self.table.selection()
         if not self.project or not selected:
             return
@@ -139,6 +163,7 @@ class Desktop:
             return
         source, target = self.project.source, self.project.target
         project_id = self.project.manifest["id"]
+        self.busy = True
         self.status.set("DeepL…")
         def worker():
             try:
@@ -149,7 +174,57 @@ class Desktop:
                 self.events.put(("error", str(exc)))
         threading.Thread(target=worker, daemon=True).start()
 
+    def edit_glossary(self):
+        if not self.project or self.busy:
+            return
+        source = simpledialog.askstring("Glossary", "Kaynak terim / Source term")
+        if source:
+            target = simpledialog.askstring("Glossary", "Hedef terim / Target term")
+            if target:
+                try:
+                    self.project.set_glossary(source, target)
+                    self.details.set(str(self.project.glossary()))
+                except ValueError as exc:
+                    messagebox.showerror("Glossary", str(exc))
+
+    def show_history(self):
+        if self.project and self.table.selection():
+            rows = self.project.db.execute("SELECT updated,text FROM history WHERE segment_id=? AND target=? ORDER BY id DESC LIMIT 10", (self.table.selection()[0], self.project.target)).fetchall()
+            messagebox.showinfo("History", "\n".join(f"{r[0]}: {r[1]}" for r in rows) or "Kayıt yok / No history")
+
+    def start_job(self):
+        if not self.project or self.busy:
+            return
+        if not messagebox.askyesno("DeepL", "Bekleyen metinler DeepL'e gönderilir, ücret doğabilir.\nPending texts are sent to DeepL and may incur charges. Continue?"):
+            return
+        try:
+            DeepLProvider().validate_configuration()
+            row = self.project.db.execute("SELECT id FROM jobs WHERE target=? AND state!='Completed' ORDER BY created DESC LIMIT 1", (self.project.target,)).fetchone()
+            job_id = row[0] if row else create_job(self.project)
+        except Exception as exc:
+            messagebox.showerror("DeepL", str(exc))
+            return
+        directory, project_id, target = self.project.directory, self.project.manifest["id"], self.project.target
+        self.busy = True
+        self.cancel_job.clear()
+        def worker():
+            project = None
+            try:
+                project = Project(directory)
+                project.target = target
+                result = run_job(project, job_id, DeepLProvider(), self.cancel_job,
+                                 progress=lambda r: self.events.put(("job_progress", (project_id, r))))
+                self.events.put(("job_done", (project_id, result)))
+            except Exception as exc:
+                self.events.put(("error", str(exc)))
+            finally:
+                if project:
+                    project.close()
+        threading.Thread(target=worker, daemon=True).start()
+
     def select_game(self):
+        if self.busy:
+            return
         directory = filedialog.askdirectory()
         if directory:
             self.run_scan(Path(directory))
@@ -167,6 +242,13 @@ class Desktop:
     def show_report(self):
         self.table.delete(*self.table.get_children())
         for segment in self.report.segments:
+            entry = self.project.translation(segment.id) if self.project else None
+            query = self.filter_text.get().casefold()
+            status = self.filter_status.get()
+            if query and query not in (segment.text + segment.context + (entry["text"] if entry else "")).casefold():
+                continue
+            if status == "Pending" and entry or status in ("Translated", "Reviewed") and (not entry or entry["status"] != status) or status == "Locked" and (not entry or not entry["locked"]):
+                continue
             self.table.insert("", "end", iid=segment.id, values=(segment.context, segment.text))
         counts = self.report.to_dict()["counts"]
         self.status.set(f"{self.report.engine} · {self.project.progress() if self.project else counts}")
@@ -184,6 +266,7 @@ class Desktop:
                     self.report = result
                     self.show_report()
                 elif event == "translation":
+                    self.busy = False
                     try:
                         if not self.project or self.project.manifest["id"] != result[0]:
                             self.status.set("Proje değişti; eski istek kaydedilmedi / Project changed; result discarded")
@@ -193,7 +276,17 @@ class Desktop:
                         self.status.set(str(self.project.progress()))
                     except (ValueError, OSError) as exc:
                         messagebox.showerror("GameTranslator", str(exc))
+                elif event in ("job_progress", "job_done"):
+                    if event == "job_done":
+                        self.busy = False
+                    if self.project and self.project.manifest["id"] == result[0]:
+                        report = result[1]
+                        self.status.set(f"{report['state']} · {report['completed']}/{report['total']} · Failed {report['failed']} · Billed chars {report['billed']}")
+                        if event == "job_done":
+                            self.show_report()
+                            self.details.set(str({k: v for k, v in report.items() if k != "items"}))
                 else:
+                    self.busy = False
                     self.status.set("İşlem başarısız / Operation failed")
                     messagebox.showerror("GameTranslator", result)
         except queue.Empty:

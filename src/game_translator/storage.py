@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .adapters import read_json
-from .models import ScanReport, Segment
+from .models import ScanReport, Segment, digest
 from .tokens import validate_translation
 
 
@@ -34,7 +34,22 @@ class Project:
         self.db = sqlite3.connect(database.as_uri() + "?mode=rw", uri=True)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
+        self.db.execute("PRAGMA trusted_schema=OFF")
         self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS glossary(source TEXT NOT NULL, target TEXT NOT NULL,
+                translation TEXT NOT NULL, PRIMARY KEY(source,target));
+            CREATE TABLE IF NOT EXISTS memory(key TEXT PRIMARY KEY, translation TEXT NOT NULL,
+                provider TEXT NOT NULL, updated TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, target TEXT NOT NULL,
+                state TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0, billed INTEGER NOT NULL DEFAULT 0,
+                created TEXT NOT NULL, updated TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS job_items(job_id TEXT NOT NULL REFERENCES jobs(id),
+                segment_id TEXT NOT NULL REFERENCES segments(id), state TEXT NOT NULL,
+                error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(job_id, segment_id));
+        """)
 
     @classmethod
     def create(cls, directory: Path, report: ScanReport, source="EN", target="TR"):
@@ -98,6 +113,33 @@ class Project:
                                 (segment_id, self.target, existing["text"], existing["provider"], existing["status"], existing["updated"]))
             self.db.execute("INSERT INTO translations VALUES (?,?,?,?,?,?,?) ON CONFLICT(segment_id,target) DO UPDATE SET text=excluded.text, provider=excluded.provider, status=excluded.status, locked=excluded.locked, updated=excluded.updated",
                             (segment_id, self.target, text, provider, status, int(locked), updated))
+            if reviewed:
+                segment = next(s for s in self.segments() if s.id == segment_id)
+                self.db.execute("INSERT OR REPLACE INTO memory VALUES (?,?,?,?)",
+                                (self.memory_key(segment), text, provider, updated))
+
+    def glossary(self):
+        return dict(self.db.execute("SELECT source,translation FROM glossary WHERE target=? ORDER BY source", (self.target,)).fetchall())
+
+    def set_glossary(self, source, translation):
+        if not source.strip() or not translation.strip():
+            raise ValueError("Glossary term and translation must not be empty")
+        from .tokens import protected_tokens
+        if protected_tokens(source) or protected_tokens(translation):
+            raise ValueError("Glossary terms must not contain control codes")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO glossary VALUES (?,?,?)", (source, self.target, translation))
+
+    def memory_key(self, segment):
+        identity = [self.manifest["id"], self.source, self.target, segment.text,
+                    segment.context, sorted(self.glossary().items())]
+        return digest(json.dumps(identity, ensure_ascii=False).encode())
+
+    def recalled(self, segment):
+        row = self.db.execute("SELECT translation FROM memory WHERE key=?", (self.memory_key(segment),)).fetchone()
+        if row:
+            validate_translation(segment.text, row[0])
+        return row[0] if row else None
 
     def progress(self):
         total = self.db.execute("SELECT count(*) FROM segments").fetchone()[0]
