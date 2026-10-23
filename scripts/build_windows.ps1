@@ -17,7 +17,8 @@ try {
     $licenseDirectory = 'dist/GameTranslator/licenses'
     New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $pythonRoot 'LICENSE.txt') -Destination (Join-Path $licenseDirectory 'Python-LICENSE.txt') -Force
-    $tclVersion = & $Python -c 'import tkinter; t=tkinter.Tcl(); print(t.call("info", "patchlevel"))'
+    $tclVersion = & $Python -c "import tkinter; t=tkinter.Tcl(); print(t.call('info', 'patchlevel'))"
+    if ($LASTEXITCODE -ne 0) { throw 'Tcl runtime version detection failed.' }
     $tclLicense = "docs/licenses/Tcl-$tclVersion-license.terms"
     if (-not (Test-Path -LiteralPath $tclLicense)) { throw "Review and add Tcl $tclVersion license before packaging." }
     Copy-Item -LiteralPath $tclLicense -Destination $licenseDirectory -Force
