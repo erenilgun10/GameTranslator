@@ -36,6 +36,7 @@ class Desktop:
         ttk.Label(bar, text="Kaynak → Hedef / Source → Target").pack(side="left", padx=8)
         ttk.Entry(bar, textvariable=self.source_language, width=6).pack(side="left")
         ttk.Entry(bar, textvariable=self.target_language, width=6).pack(side="left", padx=4)
+        ttk.Button(bar, text="Dili seç / Use target", command=self.switch_target).pack(side="left")
         self.status = tk.StringVar(value="API anahtarı gerekmez / No API key required")
         ttk.Label(root, textvariable=self.status, padding=8).pack(fill="x")
         frame = ttk.Frame(root, padding=12)
@@ -193,6 +194,15 @@ class Desktop:
                     self.details.set(str(self.project.glossary()))
                 except ValueError as exc:
                     messagebox.showerror("Glossary", str(exc))
+
+    def switch_target(self):
+        if self.project and not self.busy:
+            try:
+                self.project.set_target(self.target_language.get())
+                self.translation_text.delete("1.0", "end")
+                self.show_report()
+            except ValueError as exc:
+                messagebox.showerror("Language", str(exc))
 
     def stage_patch(self):
         if not self.project or self.busy:

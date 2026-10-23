@@ -52,6 +52,8 @@ def main(argv=None):
     restoring.add_argument("game", type=Path)
     restoring.add_argument("backup", type=Path)
     restoring.add_argument("--approve", action="store_true")
+    for command in (status, editor, glossary, translator, jobs, staging):
+        command.add_argument("--target", help="Operate on another target language without changing the default")
     commands.add_parser("gui", help="Open desktop application")
     args = parser.parse_args(argv)
     try:
@@ -67,6 +69,8 @@ def main(argv=None):
         elif args.command == "stage":
             project = Project(args.project)
             try:
+                if args.target:
+                    project.set_target(args.target, persist=False)
                 print(json.dumps(stage(project, args.output), ensure_ascii=False, indent=2))
             finally:
                 project.close()
@@ -77,6 +81,8 @@ def main(argv=None):
         elif args.command in ("status", "edit", "glossary", "translate", "jobs"):
             project = Project(args.project)
             try:
+                if args.target:
+                    project.set_target(args.target, persist=False)
                 if args.command == "edit":
                     project.save_translation(args.segment_id, args.text, reviewed=args.reviewed, locked=args.lock)
                 elif args.command == "glossary":

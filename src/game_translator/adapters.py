@@ -167,12 +167,24 @@ class MZAdapter:
         self.extract(relative, data)
 
 
+class MVAdapter(MZAdapter):
+    """MV uses its own marker and four-parameter Show Text command schema."""
+    engine = "MV"
+    marker = "js/rpg_core.js"
+
+
 def detect_game(root: Path):
     root = root.absolute()
-    adapter = MZAdapter()
-    if adapter.detect(root):
-        return root, adapter
-    raise ValueError("Supported RPG Maker MZ game not detected")
+    detected = []
+    for candidate in (root, root / "www"):
+        for adapter in (MZAdapter(), MVAdapter()):
+            if adapter.detect(candidate):
+                detected.append((candidate, adapter))
+    if len(detected) > 1:
+        raise ValueError("Ambiguous engine/root markers; select an unambiguous game folder")
+    if detected:
+        return detected[0]
+    raise ValueError("Supported RPG Maker MV/MZ game not detected")
 
 
 def scan(game: Path) -> ScanReport:

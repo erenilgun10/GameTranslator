@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -101,7 +102,7 @@ class Project:
         return self.db.execute("SELECT * FROM translations WHERE segment_id=? AND target=?", (segment_id, self.target)).fetchone()
 
     def save_translation(self, segment_id, text, provider="manual", reviewed=False, locked=False, automatic=False):
-        row = self.db.execute("SELECT text FROM segments WHERE id=?", (segment_id,)).fetchone()
+        row = self.db.execute("SELECT * FROM segments WHERE id=?", (segment_id,)).fetchone()
         if row is None:
             raise ValueError("Unknown segment")
         validate_translation(row["text"], text)
@@ -116,12 +117,25 @@ class Project:
             self.db.execute("INSERT INTO translations VALUES (?,?,?,?,?,?,?) ON CONFLICT(segment_id,target) DO UPDATE SET text=excluded.text, provider=excluded.provider, status=excluded.status, locked=excluded.locked, updated=excluded.updated",
                             (segment_id, self.target, text, provider, status, int(locked), updated))
             if reviewed:
-                segment = next(s for s in self.segments() if s.id == segment_id)
+                segment = Segment(row["id"], row["file"], tuple(json.loads(row["path"])), row["text"], row["context"])
                 self.db.execute("INSERT OR REPLACE INTO memory VALUES (?,?,?,?)",
                                 (self.memory_key(segment), text, provider, updated))
 
     def glossary(self):
         return dict(self.db.execute("SELECT source,translation FROM glossary WHERE target=? ORDER BY source", (self.target,)).fetchall())
+
+    def set_target(self, target, persist=True):
+        target = language(target)
+        if persist:
+            manifest = dict(self.manifest, target_language=target)
+            temporary = self.directory / (".project-" + uuid.uuid4().hex + ".tmp")
+            try:
+                temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(temporary, self.directory / "project.json")
+            finally:
+                temporary.unlink(missing_ok=True)
+            self.manifest = manifest
+        self.target = target
 
     def set_glossary(self, source, translation):
         if not source.strip() or not translation.strip():
