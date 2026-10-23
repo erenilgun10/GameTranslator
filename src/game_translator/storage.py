@@ -34,8 +34,8 @@ class Project:
                 or not isinstance(self.manifest.get("id"), str)):
             raise ValueError("Invalid project identity, engine or game path")
         uuid.UUID(self.manifest["id"])
-        self.target = language(self.manifest["target_language"])
-        self.source = language(self.manifest["source_language"])
+        self.target = language(self.manifest.get("target_language"))
+        self.source = language(self.manifest.get("source_language"))
         database = self.directory / "project.sqlite3"
         if database.is_symlink() or not database.is_file():
             raise ValueError("Missing or unsafe project database")

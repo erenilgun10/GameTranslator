@@ -1,5 +1,6 @@
 import queue
 import json
+import sqlite3
 import sys
 import threading
 import tkinter as tk
@@ -25,6 +26,9 @@ class Desktop:
         self.report = None
         self.project = None
         self.busy = False
+        self.closing = False
+        self.editing_id = None
+        self.saved_editor = ("", False, True)
         self.cancel_job = threading.Event()
         bar = ttk.Frame(root, padding=12)
         bar.pack(fill="x")
@@ -73,8 +77,10 @@ class Desktop:
         actions.pack(fill="x", pady=5)
         self.reviewed = tk.BooleanVar(value=False)
         self.locked = tk.BooleanVar(value=True)
-        ttk.Checkbutton(actions, text="İncelendi / Reviewed", variable=self.reviewed).pack(side="left")
-        ttk.Checkbutton(actions, text="Otomatik çeviriye kilitli / Locked", variable=self.locked).pack(side="left")
+        self.review_button = ttk.Checkbutton(actions, text="İncelendi / Reviewed", variable=self.reviewed)
+        self.review_button.pack(side="left")
+        self.lock_button = ttk.Checkbutton(actions, text="Otomatik çeviriye kilitli / Locked", variable=self.locked)
+        self.lock_button.pack(side="left")
         ttk.Button(actions, text="Kaydet / Save", command=self.save).pack(side="left", padx=8)
         ttk.Button(actions, text="Bellekten getir / Recall", command=self.recall).pack(side="left", padx=4)
         ttk.Button(actions, text="DeepL ile çevir / Translate", command=self.translate_selected).pack(side="left")
@@ -91,10 +97,50 @@ class Desktop:
         self.root.after(100, self.poll)
 
     def close(self):
+        if self.busy:
+            self.closing = True
+            self.cancel_job.set()
+            self.status.set("İşlemin güvenle bitmesi bekleniyor / Waiting for operation to finish safely")
+            return False
+        if not self.confirm_unsaved():
+            self.closing = False
+            return False
         self.cancel_job.set()
         if self.project:
             self.project.close()
+            self.project = None
         self.root.destroy()
+        return True
+
+    def editor_state(self):
+        return (self.translation_text.get("1.0", "end-1c"), self.reviewed.get(), self.locked.get())
+
+    def has_unsaved(self):
+        return bool(self.project and self.editing_id and self.editor_state() != self.saved_editor)
+
+    def confirm_unsaved(self):
+        if not self.has_unsaved():
+            return True
+        answer = messagebox.askyesnocancel("GameTranslator", "Değişiklikler kaydedilsin mi? Hayır: taslağı bırak. İptal: düzenlemeye dön.\nSave changes? No: discard draft. Cancel: keep editing.")
+        if answer is None:
+            return False
+        return self.save() if answer else True
+
+    def load_editor(self, segment_id=None):
+        self.editing_id = segment_id
+        entry = self.project.translation(segment_id) if self.project and segment_id else None
+        self.translation_text.delete("1.0", "end")
+        if entry:
+            self.translation_text.insert("1.0", entry["text"])
+        self.translation_text.edit_reset()
+        self.reviewed.set(bool(entry and entry["status"] == "Reviewed"))
+        self.locked.set(bool(entry["locked"]) if entry else True)
+        self.saved_editor = self.editor_state()
+        if segment_id:
+            segment = next(s for s in self.report.segments if s.id == segment_id)
+            self.details.set(segment.text + "\n" + segment.context)
+        else:
+            self.details.set("")
 
     def new_project(self):
         if self.busy:
@@ -103,70 +149,77 @@ class Desktop:
             messagebox.showinfo("GameTranslator", "Önce oyun tara / Scan a game first")
             return
         directory = filedialog.asksaveasfilename(title="Yeni proje klasörü / New project directory", defaultextension=".gtproj")
-        if directory:
+        if directory and self.confirm_unsaved():
             try:
                 project = Project.create(Path(directory), self.report, self.source_language.get(), self.target_language.get())
                 if self.project:
                     self.project.close()
                 self.project = project
+                self.load_editor()
                 self.show_report()
-            except (ValueError, OSError) as exc:
+            except (ValueError, OSError, sqlite3.Error) as exc:
                 messagebox.showerror("GameTranslator", str(exc))
 
     def open_project(self):
         if self.busy:
             return
         directory = filedialog.askdirectory(title="Proje klasörü / Project directory")
-        if directory:
+        if directory and self.confirm_unsaved():
+            project = None
             try:
                 project = Project(Path(directory))
-                if self.project:
-                    self.project.close()
-                self.project = project
-                self.source_language.set(project.source)
-                self.target_language.set(project.target)
-                self.report = ScanReport(project.manifest["game"], project.manifest["engine"],
+                report = ScanReport(project.manifest["game"], project.manifest["engine"],
                                          [SourceFile(r[0], r[1]) for r in project.db.execute("SELECT * FROM sources")], project.segments())
                 report_path = safe_path(project.directory, "scan-report.json")
                 if report_path.is_file():
                     saved_report = read_json(report_path)
-                    self.report.findings = [Finding(**f) for f in saved_report.get("findings", [])]
-                    self.report.skipped = saved_report.get("skipped", 0)
+                    report.findings = [Finding(**f) for f in saved_report.get("findings", [])]
+                    report.skipped = saved_report.get("skipped", 0)
+                if self.project:
+                    self.project.close()
+                self.project = project
+                self.report = report
+                self.source_language.set(project.source)
+                self.target_language.set(project.target)
+                self.load_editor()
                 self.show_report()
             except Exception as exc:
+                if project and project is not self.project:
+                    project.close()
                 messagebox.showerror("GameTranslator", f"Proje açılamadı / Cannot open project: {type(exc).__name__}")
 
     def select_segment(self, _event=None):
         selected = self.table.selection()
-        if not selected:
+        if not selected or selected[0] == self.editing_id or self.translation_text.cget("state") == "disabled":
             return
-        segment = next(s for s in self.report.segments if s.id == selected[0])
-        entry = self.project.translation(segment.id) if self.project else None
-        self.translation_text.delete("1.0", "end")
-        if entry:
-            self.translation_text.insert("1.0", entry["text"])
-        self.reviewed.set(bool(entry and entry["status"] == "Reviewed"))
-        self.locked.set(bool(entry["locked"]) if entry else True)
-        self.details.set(segment.text + "\n" + segment.context)
+        if not self.confirm_unsaved():
+            if self.editing_id and self.table.exists(self.editing_id):
+                self.table.selection_set(self.editing_id)
+            else:
+                self.table.selection_remove(*selected)
+            return
+        self.load_editor(selected[0])
 
     def save(self):
-        selected = self.table.selection()
-        if not self.project or not selected:
+        if not self.project or not self.editing_id:
             messagebox.showinfo("GameTranslator", "Proje ve metin seç / Select a project and segment")
-            return
+            return False
         try:
             text = self.translation_text.get("1.0", "end-1c")
-            self.project.save_translation(selected[0], text, reviewed=self.reviewed.get(), locked=self.locked.get())
+            self.project.save_translation(self.editing_id, text, reviewed=self.reviewed.get(), locked=self.locked.get())
+            self.saved_editor = self.editor_state()
             self.status.set(str(self.project.progress()))
-            segment = next(s for s in self.report.segments if s.id == selected[0])
+            segment = next(s for s in self.report.segments if s.id == self.editing_id)
             self.details.set("Uzun metin: oyun içinde kontrol edin / Long text: check in game" if len(text) > max(80, len(segment.text) * 1.5) else "Kaydedildi / Saved")
-        except (ValueError, OSError) as exc:
+            return True
+        except (ValueError, OSError, sqlite3.Error) as exc:
             messagebox.showerror("GameTranslator", str(exc))
+            return False
 
     def recall(self):
-        if not self.project or not self.table.selection():
+        if not self.project or not self.editing_id or self.translation_text.cget("state") == "disabled":
             return
-        segment = next(s for s in self.report.segments if s.id == self.table.selection()[0])
+        segment = next(s for s in self.report.segments if s.id == self.editing_id)
         text = self.project.recalled(segment)
         if text:
             self.translation_text.delete("1.0", "end")
@@ -181,6 +234,8 @@ class Desktop:
         selected = self.table.selection()
         if not self.project or not selected:
             return
+        if not self.confirm_unsaved():
+            return
         segment = next(s for s in self.report.segments if s.id == selected[0])
         entry = self.project.translation(segment.id)
         if entry and entry["locked"]:
@@ -191,6 +246,7 @@ class Desktop:
         source, target = self.project.source, self.project.target
         project_id = self.project.manifest["id"]
         self.busy = True
+        self.cancel_job.clear()
         self.status.set("DeepL…")
         def worker():
             try:
@@ -216,18 +272,22 @@ class Desktop:
 
     def switch_target(self):
         if self.project and not self.busy:
+            if not self.confirm_unsaved():
+                self.target_language.set(self.project.target)
+                return
             try:
                 self.project.set_target(self.target_language.get())
-                self.translation_text.delete("1.0", "end")
+                self.load_editor()
                 self.show_report()
             except ValueError as exc:
+                self.target_language.set(self.project.target)
                 messagebox.showerror("Language", str(exc))
 
     def stage_patch(self):
         if not self.project or self.busy:
             return
         directory = filedialog.asksaveasfilename(title="Yeni patch klasörü / New patch folder", defaultextension=".patch")
-        if directory:
+        if directory and self.confirm_unsaved():
             try:
                 manifest = stage(self.project, Path(directory))
                 preview = tk.Toplevel(self.root)
@@ -281,6 +341,8 @@ class Desktop:
     def start_job(self):
         if not self.project or self.busy:
             return
+        if not self.confirm_unsaved():
+            return
         if not messagebox.askyesno("DeepL", "Bekleyen metinler DeepL'e gönderilir, ücret doğabilir.\nPending texts are sent to DeepL and may incur charges. Continue?"):
             return
         try:
@@ -316,6 +378,12 @@ class Desktop:
             self.run_scan(Path(directory))
 
     def run_scan(self, path):
+        if self.busy or not self.confirm_unsaved():
+            return
+        self.busy = True
+        self.translation_text.configure(state="disabled")
+        self.review_button.configure(state="disabled")
+        self.lock_button.configure(state="disabled")
         self.scan_button.configure(state="disabled")
         self.status.set("Taranıyor… / Scanning…")
         def worker():
@@ -336,20 +404,29 @@ class Desktop:
             if status == "Pending" and entry or status in ("Translated", "Reviewed") and (not entry or entry["status"] != status) or status == "Locked" and (not entry or not entry["locked"]):
                 continue
             self.table.insert("", "end", iid=segment.id, values=(segment.context, segment.text))
+        if self.editing_id and self.table.exists(self.editing_id):
+            self.table.selection_set(self.editing_id)
         counts = self.report.to_dict()["counts"]
         self.status.set(f"{self.report.engine} · {counts | self.project.progress() if self.project else counts}")
-        self.details.set("\n".join(f"{f.file}: {f.reason}" for f in self.report.findings[:5]))
+        if not self.editing_id:
+            self.details.set("\n".join(f"{f.file}: {f.reason}" for f in self.report.findings[:5]))
 
     def poll(self):
         try:
             while True:
                 event, result = self.events.get_nowait()
-                self.scan_button.configure(state="normal")
+                if event != "job_progress":
+                    self.busy = False
+                    self.scan_button.configure(state="normal")
+                    self.translation_text.configure(state="normal")
+                    self.review_button.configure(state="normal")
+                    self.lock_button.configure(state="normal")
                 if event == "scan":
                     if self.project:
                         self.project.close()
                         self.project = None
                     self.report = result
+                    self.load_editor()
                     self.show_report()
                 elif event == "translation":
                     self.busy = False
@@ -358,9 +435,10 @@ class Desktop:
                             self.status.set("Proje değişti; eski istek kaydedilmedi / Project changed; result discarded")
                             continue
                         self.project.save_translation(result[1], result[2], provider="DeepL", automatic=True)
-                        self.select_segment()
+                        if self.editing_id == result[1] and not self.has_unsaved():
+                            self.load_editor(result[1])
                         self.status.set(str(self.project.progress()))
-                    except (ValueError, OSError) as exc:
+                    except (ValueError, OSError, sqlite3.Error) as exc:
                         messagebox.showerror("GameTranslator", str(exc))
                 elif event in ("job_progress", "job_done"):
                     if event == "job_done":
@@ -378,6 +456,8 @@ class Desktop:
                     messagebox.showerror("GameTranslator", result)
         except queue.Empty:
             pass
+        if self.closing and not self.busy and self.close():
+            return
         self.root.after(100, self.poll)
 
 

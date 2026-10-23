@@ -1,5 +1,6 @@
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -118,7 +119,7 @@ def main(argv=None):
                     for s in project.segments()]}, ensure_ascii=False, indent=2))
             finally:
                 project.close()
-    except (ValueError, OSError, ProviderError) as exc:
+    except (ValueError, OSError, ProviderError, sqlite3.Error) as exc:
         parser.exit(1, f"Error: {exc}\n")
 
 
