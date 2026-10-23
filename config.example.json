@@ -1,0 +1,6 @@
+{
+  "source_language": "EN",
+  "target_language": "TR",
+  "provider": "manual",
+  "deepl_key_environment_variable": "DEEPL_API_KEY"
+}
