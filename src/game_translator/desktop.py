@@ -1,4 +1,5 @@
 import queue
+import json
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -10,6 +11,7 @@ from .providers import DeepLProvider
 from .storage import Project
 from .tokens import protect
 from .jobs import create_job, run_job
+from .patching import apply, load_manifest, restore, stage
 
 
 class Desktop:
@@ -73,8 +75,13 @@ class Desktop:
         ttk.Checkbutton(actions, text="Otomatik çeviriye kilitli / Locked", variable=self.locked).pack(side="left")
         ttk.Button(actions, text="Kaydet / Save", command=self.save).pack(side="left", padx=8)
         ttk.Button(actions, text="DeepL ile çevir / Translate", command=self.translate_selected).pack(side="left")
-        ttk.Button(actions, text="Toplu başlat/devam / Batch", command=self.start_job).pack(side="left", padx=4)
-        ttk.Button(actions, text="Duraklat / Pause", command=self.cancel_job.set).pack(side="left")
+        patch_bar = ttk.Frame(editor)
+        patch_bar.pack(fill="x", pady=4)
+        ttk.Button(patch_bar, text="Toplu başlat/devam / Batch", command=self.start_job).pack(side="left")
+        ttk.Button(patch_bar, text="Duraklat / Pause", command=self.cancel_job.set).pack(side="left", padx=4)
+        ttk.Button(patch_bar, text="Patch hazırla / Stage", command=self.stage_patch).pack(side="left")
+        ttk.Button(patch_bar, text="Patch uygula / Apply", command=self.apply_patch).pack(side="left", padx=4)
+        ttk.Button(patch_bar, text="Geri al / Restore", command=self.restore_patch).pack(side="left")
         self.details = tk.StringVar(value="")
         ttk.Label(editor, textvariable=self.details, wraplength=1000).pack(fill="x")
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -186,6 +193,55 @@ class Desktop:
                     self.details.set(str(self.project.glossary()))
                 except ValueError as exc:
                     messagebox.showerror("Glossary", str(exc))
+
+    def stage_patch(self):
+        if not self.project or self.busy:
+            return
+        directory = filedialog.asksaveasfilename(title="Yeni patch klasörü / New patch folder", defaultextension=".patch")
+        if directory:
+            try:
+                manifest = stage(self.project, Path(directory))
+                preview = tk.Toplevel(self.root)
+                preview.title("Patch: semantic diff")
+                preview.geometry("900x600")
+                text = tk.Text(preview, wrap="word")
+                scroll = ttk.Scrollbar(preview, command=text.yview)
+                text.configure(yscrollcommand=scroll.set)
+                scroll.pack(side="right", fill="y")
+                text.pack(fill="both", expand=True)
+                text.insert("1.0", json.dumps(manifest, ensure_ascii=False, indent=2))
+                text.configure(state="disabled")
+                self.details.set(directory)
+            except Exception as exc:
+                messagebox.showerror("Patch", str(exc))
+
+    def apply_patch(self):
+        if not self.project or self.busy:
+            return
+        directory = filedialog.askdirectory(title="Patch klasörü / Patch folder")
+        if not directory:
+            return
+        try:
+            manifest = load_manifest(Path(directory))
+            listing = "\n".join(f["path"] for f in manifest["files"][:20])
+            if not messagebox.askyesno("Patch", f"Oyun dosyaları değişecek / Game files will change:\n{listing}\n\nOnaylıyor musun / Approve?"):
+                return
+            backup = filedialog.asksaveasfilename(title="Yeni yedek klasörü / New backup folder", defaultextension=".backup")
+            if backup:
+                result = apply(Path(self.project.manifest["game"]), Path(directory), Path(backup), approved=True)
+                self.details.set(str(result))
+        except Exception as exc:
+            messagebox.showerror("Patch", str(exc))
+
+    def restore_patch(self):
+        if not self.project or self.busy:
+            return
+        directory = filedialog.askdirectory(title="Yedek klasörü / Backup folder")
+        if directory and messagebox.askyesno("Restore", "Yedekteki özgün dosyalar geri yüklenecek. Onay?\nRestore original files from this backup?"):
+            try:
+                self.details.set(str(restore(Path(self.project.manifest["game"]), Path(directory), approved=True)))
+            except Exception as exc:
+                messagebox.showerror("Restore", str(exc))
 
     def show_history(self):
         if self.project and self.table.selection():

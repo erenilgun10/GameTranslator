@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .adapters import read_json
+from .adapters import read_json, safe_path
 from .models import ScanReport, Segment, digest
 from .tokens import validate_translation
 
@@ -22,6 +22,7 @@ def language(value):
 
 class Project:
     def __init__(self, directory: Path):
+        safe_path(directory.absolute(), "project.json")
         self.directory = directory.resolve()
         self.manifest = read_json(self.directory / "project.json")
         if self.manifest.get("format") != 1:
@@ -54,6 +55,7 @@ class Project:
     @classmethod
     def create(cls, directory: Path, report: ScanReport, source="EN", target="TR"):
         source, target = language(source), language(target)
+        safe_path(directory.absolute(), "project.json")
         directory = directory.resolve()
         game = Path(report.game).resolve()
         if directory.is_relative_to(game) or game.is_relative_to(directory):

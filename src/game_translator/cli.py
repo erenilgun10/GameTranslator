@@ -7,6 +7,7 @@ from .adapters import scan
 from .storage import Project
 from .jobs import create_job, job_report, run_job
 from .providers import DeepLProvider, ProviderError
+from .patching import apply, restore, stage
 
 
 def main(argv=None):
@@ -39,6 +40,18 @@ def main(argv=None):
     translator.add_argument("--batch-size", type=int, default=20)
     jobs = commands.add_parser("jobs", help="Show job checkpoints and errors")
     jobs.add_argument("project", type=Path)
+    staging = commands.add_parser("stage", help="Stage reviewed translations outside the game")
+    staging.add_argument("project", type=Path)
+    staging.add_argument("output", type=Path)
+    applying = commands.add_parser("apply", help="Validate, back up and apply a staged patch")
+    applying.add_argument("game", type=Path)
+    applying.add_argument("bundle", type=Path)
+    applying.add_argument("backup", type=Path)
+    applying.add_argument("--approve", action="store_true")
+    restoring = commands.add_parser("restore", help="Restore exact original bytes from a verified backup")
+    restoring.add_argument("game", type=Path)
+    restoring.add_argument("backup", type=Path)
+    restoring.add_argument("--approve", action="store_true")
     commands.add_parser("gui", help="Open desktop application")
     args = parser.parse_args(argv)
     try:
@@ -51,6 +64,16 @@ def main(argv=None):
             project = Project.create(args.project, scan(args.game), args.source, args.target)
             print(json.dumps(project.progress()))
             project.close()
+        elif args.command == "stage":
+            project = Project(args.project)
+            try:
+                print(json.dumps(stage(project, args.output), ensure_ascii=False, indent=2))
+            finally:
+                project.close()
+        elif args.command == "apply":
+            print(json.dumps(apply(args.game, args.bundle, args.backup, args.approve)))
+        elif args.command == "restore":
+            print(json.dumps(restore(args.game, args.backup, args.approve)))
         elif args.command in ("status", "edit", "glossary", "translate", "jobs"):
             project = Project(args.project)
             try:

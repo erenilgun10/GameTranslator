@@ -21,7 +21,7 @@ def safe_path(root: Path, relative: str) -> Path:
         raise ValueError("Unsafe relative path")
     target = root / path
     current = root
-    if root.is_symlink() or root.is_junction():
+    if any(p.is_symlink() or p.is_junction() for p in (root, *root.parents)):
         raise ValueError("Symlink/junction roots are unsupported")
     for part in path.parts:
         current /= part
@@ -32,9 +32,17 @@ def safe_path(root: Path, relative: str) -> Path:
     return target
 
 
-def read_json(path: Path):
+def source_bytes(path: Path):
     if path.stat().st_size > MAX_SOURCE_BYTES:
         raise ValueError("JSON exceeds 32 MiB safety limit")
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_SOURCE_BYTES + 1)
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise ValueError("JSON exceeds 32 MiB safety limit")
+    return raw
+
+
+def parse_json(raw):
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -42,10 +50,14 @@ def read_json(path: Path):
                 raise ValueError("Duplicate JSON keys")
             result[key] = value
         return result
-    text = path.read_bytes().decode("utf-8-sig")
+    text = raw.decode("utf-8-sig")
     text.encode("utf-8", errors="strict")
     return json.loads(text, object_pairs_hook=unique,
                       parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Non-finite JSON number")))
+
+
+def read_json(path: Path):
+    return parse_json(source_bytes(path))
 
 
 class MZAdapter:
@@ -170,8 +182,8 @@ def scan(game: Path) -> ScanReport:
         relative = path.relative_to(root).as_posix()
         try:
             safe_path(root, relative)
-            raw = path.read_bytes() if path.stat().st_size <= MAX_SOURCE_BYTES else b""
-            data = read_json(path)
+            raw = source_bytes(path)
+            data = parse_json(raw)
             segments, findings, skipped = adapter.extract(relative, data)
             report.sources.append(SourceFile(relative, digest(raw)))
             report.segments.extend(segments)
