@@ -3,6 +3,8 @@ import json
 import os
 import re
 import uuid
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__
@@ -10,6 +12,33 @@ from .adapters import detect_game, parse_json, read_json, safe_path, source_byte
 from .models import digest
 from .storage import now
 from .tokens import validate_translation
+
+
+@contextmanager
+def game_lock(game):
+    root, _ = detect_game(game)
+    directory = Path(tempfile.gettempdir()) / "GameTranslator-locks"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = safe_path(directory, digest(str(root.resolve()).casefold().encode()) + ".lock")
+    handle = path.open("a+b")
+    try:
+        if path.stat().st_size == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise ValueError("Another apply/restore operation is using this game") from None
+        yield root
+    finally:
+        # Closing releases the OS lock, including after process termination.
+        handle.close()
 
 
 def outside_game(directory: Path, game: Path):
@@ -146,7 +175,7 @@ def load_manifest(directory):
     return manifest
 
 
-def apply(game: Path, bundle: Path, backup: Path, approved=False):
+def _apply(game: Path, bundle: Path, backup: Path, approved=False):
     if not approved:
         raise ValueError("Explicit patch approval is required")
     root, adapter = detect_game(game)
@@ -200,7 +229,7 @@ def apply(game: Path, bundle: Path, backup: Path, approved=False):
     except BaseException:
         # Persistent Prepared journal also permits recovery after process/power loss.
         try:
-            restore(root, backup, approved=True)
+            _restore(root, backup, approved=True)
         except BaseException:
             journal["state"] = "RecoveryRequired"
             save_journal(backup, journal)
@@ -208,7 +237,7 @@ def apply(game: Path, bundle: Path, backup: Path, approved=False):
     return {"state": "Applied", "backup": str(backup), "files": len(prepared)}
 
 
-def restore(game: Path, backup: Path, approved=False):
+def _restore(game: Path, backup: Path, approved=False):
     if not approved:
         raise ValueError("Explicit restore approval is required")
     root, adapter = detect_game(game)
@@ -241,3 +270,17 @@ def restore(game: Path, backup: Path, approved=False):
     journal["state"] = "Restored"
     save_journal(backup, journal)
     return {"state": "Restored", "files": len(prepared)}
+
+
+def apply(game: Path, bundle: Path, backup: Path, approved=False):
+    if not approved:
+        raise ValueError("Explicit patch approval is required")
+    with game_lock(game) as root:
+        return _apply(root, bundle, backup, approved=True)
+
+
+def restore(game: Path, backup: Path, approved=False):
+    if not approved:
+        raise ValueError("Explicit restore approval is required")
+    with game_lock(game) as root:
+        return _restore(root, backup, approved=True)

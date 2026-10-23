@@ -41,3 +41,24 @@ def test_secret_not_exposed_in_errors():
     with pytest.raises(ProviderError) as result:
         DeepLProvider(key, FakeOpener(error)).translate_batch(["Hello"], "EN", "TR")
     assert key not in str(result.value)
+
+
+def test_rate_limit_has_bounded_backoff_without_real_wait():
+    class SequenceOpener:
+        calls = 0
+        def open(self, request, timeout):
+            self.calls += 1
+            if self.calls < 3:
+                raise HTTPError(request.full_url, 429, "Synthetic rate limit", {}, None)
+            return io.BytesIO(b'{"translations":[{"text":"Synthetic result"}]}')
+    class FastCancel:
+        waits = []
+        def is_set(self):
+            return False
+        def wait(self, delay):
+            self.waits.append(delay)
+            return False
+    opener, cancel = SequenceOpener(), FastCancel()
+    result = DeepLProvider("test-only", opener).translate_batch(["Hello"], "EN", "TR", cancel)
+    assert result.texts == ["Synthetic result"] and opener.calls == 3
+    assert cancel.waits == [1, 2]

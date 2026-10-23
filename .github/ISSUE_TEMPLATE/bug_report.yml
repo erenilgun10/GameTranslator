@@ -1,0 +1,19 @@
+name: Bug report
+description: Report a reproducible problem without private game data
+body:
+  - type: textarea
+    attributes:
+      label: Version and environment
+      description: Application version, Windows version, MV or MZ, relevant plugin names
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction and expected result
+      description: Prefer a minimal synthetic JSON example. Never attach full games, API keys or private project files.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Actual result
+      description: Include a sanitized error and whether backup/restore was attempted.

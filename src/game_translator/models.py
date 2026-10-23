@@ -40,7 +40,7 @@ class ScanReport:
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
-        result["counts"] = {"Extracted": len(self.segments), "SkippedSafe": self.skipped,
+        result["counts"] = {"Extracted": len(self.segments), "Translated": 0, "Reviewed": 0, "SkippedSafe": self.skipped,
                             "Unsupported": sum(f.category == "Unsupported" for f in self.findings),
                             "Warning": sum(f.category == "Warning" for f in self.findings)}
         return result

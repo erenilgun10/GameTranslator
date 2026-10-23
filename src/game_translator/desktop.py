@@ -1,12 +1,13 @@
 import queue
 import json
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from .adapters import scan
-from .models import ScanReport, SourceFile
+from .adapters import read_json, safe_path, scan
+from .models import Finding, ScanReport, SourceFile
 from .providers import DeepLProvider
 from .storage import Project
 from .tokens import protect
@@ -75,6 +76,7 @@ class Desktop:
         ttk.Checkbutton(actions, text="İncelendi / Reviewed", variable=self.reviewed).pack(side="left")
         ttk.Checkbutton(actions, text="Otomatik çeviriye kilitli / Locked", variable=self.locked).pack(side="left")
         ttk.Button(actions, text="Kaydet / Save", command=self.save).pack(side="left", padx=8)
+        ttk.Button(actions, text="Bellekten getir / Recall", command=self.recall).pack(side="left", padx=4)
         ttk.Button(actions, text="DeepL ile çevir / Translate", command=self.translate_selected).pack(side="left")
         patch_bar = ttk.Frame(editor)
         patch_bar.pack(fill="x", pady=4)
@@ -125,6 +127,11 @@ class Desktop:
                 self.target_language.set(project.target)
                 self.report = ScanReport(project.manifest["game"], project.manifest["engine"],
                                          [SourceFile(r[0], r[1]) for r in project.db.execute("SELECT * FROM sources")], project.segments())
+                report_path = safe_path(project.directory, "scan-report.json")
+                if report_path.is_file():
+                    saved_report = read_json(report_path)
+                    self.report.findings = [Finding(**f) for f in saved_report.get("findings", [])]
+                    self.report.skipped = saved_report.get("skipped", 0)
                 self.show_report()
             except Exception as exc:
                 messagebox.showerror("GameTranslator", f"Proje açılamadı / Cannot open project: {type(exc).__name__}")
@@ -155,6 +162,18 @@ class Desktop:
             self.details.set("Uzun metin: oyun içinde kontrol edin / Long text: check in game" if len(text) > max(80, len(segment.text) * 1.5) else "Kaydedildi / Saved")
         except (ValueError, OSError) as exc:
             messagebox.showerror("GameTranslator", str(exc))
+
+    def recall(self):
+        if not self.project or not self.table.selection():
+            return
+        segment = next(s for s in self.report.segments if s.id == self.table.selection()[0])
+        text = self.project.recalled(segment)
+        if text:
+            self.translation_text.delete("1.0", "end")
+            self.translation_text.insert("1.0", text)
+            self.details.set("Onaylı bellek kaydı getirildi; kaydetmeden önce incele / Approved memory recalled; review before saving")
+        else:
+            self.details.set("Bu bağlam/dil/glossary için bellek kaydı yok / No memory for this context/language/glossary")
 
     def translate_selected(self):
         if self.busy:
@@ -234,7 +253,8 @@ class Desktop:
         try:
             manifest = load_manifest(Path(directory))
             listing = "\n".join(f["path"] for f in manifest["files"][:20])
-            if not messagebox.askyesno("Patch", f"Oyun dosyaları değişecek / Game files will change:\n{listing}\n\nOnaylıyor musun / Approve?"):
+            game_path = self.project.manifest["game"]
+            if not messagebox.askyesno("Patch", f"Oyun / Game: {game_path}\nHedef / Target: {manifest.get('target_language', '?')}\n\nDeğişecek dosyalar / Files to change:\n{listing}\n\nOnaylıyor musun / Approve?"):
                 return
             backup = filedialog.asksaveasfilename(title="Yeni yedek klasörü / New backup folder", defaultextension=".backup")
             if backup:
@@ -317,7 +337,7 @@ class Desktop:
                 continue
             self.table.insert("", "end", iid=segment.id, values=(segment.context, segment.text))
         counts = self.report.to_dict()["counts"]
-        self.status.set(f"{self.report.engine} · {self.project.progress() if self.project else counts}")
+        self.status.set(f"{self.report.engine} · {counts | self.project.progress() if self.project else counts}")
         self.details.set("\n".join(f"{f.file}: {f.reason}" for f in self.report.findings[:5]))
 
     def poll(self):
@@ -362,5 +382,12 @@ class Desktop:
 
 def main():
     root = tk.Tk()
+    smoke_test = "--smoke-test" in sys.argv
+    if smoke_test:
+        root.withdraw()
     Desktop(root)
+    if smoke_test:
+        root.update()
+        root.destroy()
+        return
     root.mainloop()

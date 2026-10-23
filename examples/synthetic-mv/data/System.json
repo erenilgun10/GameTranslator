@@ -1,0 +1,5 @@
+{
+  "gameTitle": "Synthetic Valley",
+  "currencyUnit": "Coins",
+  "terms": {"basic": ["Level", "HP"], "messages": {"victory": "%1 won!"}}
+}

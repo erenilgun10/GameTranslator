@@ -1,4 +1,5 @@
 import pytest
+import json
 
 from game_translator.adapters import scan
 from game_translator.storage import Project
@@ -41,3 +42,11 @@ def test_protected_placeholders_roundtrip():
 def test_project_cannot_live_inside_game(game):
     with pytest.raises(ValueError, match="separate"):
         Project.create(game / "project.gtproj", scan(game))
+
+
+def test_invalid_imported_manifest_is_not_an_active_project(tmp_path):
+    path = tmp_path / "invalid-project"
+    path.mkdir()
+    (path / "project.json").write_text(json.dumps(["untrusted"]), encoding="utf-8")
+    with pytest.raises(ValueError, match="format"):
+        Project(path)

@@ -1,0 +1,21 @@
+name: Windows package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install --no-build-isolation -e .
+      - shell: powershell
+        run: ./scripts/build_windows.ps1 -Python python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GameTranslator-windows-x64
+          path: release/*

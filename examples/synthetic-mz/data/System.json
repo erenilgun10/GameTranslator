@@ -1,0 +1,7 @@
+{
+  "gameTitle": "Synthetic Moon Village",
+  "currencyUnit": "Coins",
+  "terms": {"basic": ["Level", "HP"], "messages": {"victory": "%1 won!"}},
+  "switches": ["", "Internal switch"],
+  "variables": ["", "Internal variable"]
+}

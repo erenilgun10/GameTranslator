@@ -1,0 +1,12 @@
+[
+  null,
+  {
+    "id": 1,
+    "name": "Internal event name",
+    "list": [
+      {"code": 101, "indent": 0, "parameters": ["ActorFace", 0, 0, 2]},
+      {"code": 401, "indent": 0, "parameters": ["A synthetic MV story, \\N[2]."]},
+      {"code": 356, "indent": 0, "parameters": ["TextPicture set Synthetic plugin text"]}
+    ]
+  }
+]

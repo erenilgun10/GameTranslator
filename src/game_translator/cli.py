@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -11,6 +12,9 @@ from .patching import apply, restore, stage
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Safe RPG Maker file translation")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -102,6 +106,8 @@ def main(argv=None):
                         print("Interrupted; resume with --job " + job_id)
                         return
                     print(json.dumps(result, ensure_ascii=False, indent=2))
+                    if result["failed"]:
+                        parser.exit(2, "Translation job has failures; inspect the job report before retrying.\n")
                     return
                 elif args.command == "jobs":
                     print(json.dumps([job_report(project, r[0]) for r in project.db.execute("SELECT id FROM jobs WHERE target=?", (project.target,))], ensure_ascii=False, indent=2))

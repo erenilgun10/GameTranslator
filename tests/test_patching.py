@@ -152,3 +152,11 @@ def test_crash_prepared_journal_can_restore_on_restart(prepared):
     (game / relative).write_bytes((backup / "files" / relative).read_bytes())
     patching.restore(game, backup, approved=True)
     assert hashes(game) == original
+
+
+def test_concurrent_apply_restore_refused(prepared):
+    game, bundle, backup = prepared
+    with patching.game_lock(game):
+        with pytest.raises(ValueError, match="Another"):
+            patching.apply(game, bundle, backup, approved=True)
+    assert not backup.exists()

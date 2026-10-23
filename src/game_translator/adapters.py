@@ -146,7 +146,13 @@ class MZAdapter:
                         raise ValueError("System type names must be an array")
                     for i, value in enumerate(data[key]):
                         add(value, [key, i])
-            for group, values in data.get("terms", {}).items():
+            terms = data.get("terms", {})
+            if not isinstance(terms, dict):
+                raise ValueError("System terms must be an object")
+            for group, values in terms.items():
+                if group not in ("basic", "params", "commands", "messages"):
+                    findings.append(Finding(relative, "Unsupported", f"Unknown terms group {group} skipped"))
+                    continue
                 if isinstance(values, list):
                     for i, value in enumerate(values):
                         add(value, ["terms", group, i])

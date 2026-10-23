@@ -16,7 +16,7 @@ def now():
 
 
 def language(value):
-    if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z]{2,4})?", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z]{2,4})?", value):
         raise ValueError("Invalid language code")
     return value.upper()
 
@@ -26,8 +26,14 @@ class Project:
         safe_path(directory.absolute(), "project.json")
         self.directory = directory.resolve()
         self.manifest = read_json(self.directory / "project.json")
-        if self.manifest.get("format") != 1:
+        if not isinstance(self.manifest, dict) or self.manifest.get("format") != 1:
             raise ValueError("Unsupported project format")
+        if (self.manifest.get("engine") not in ("MV", "MZ")
+                or not isinstance(self.manifest.get("game"), str)
+                or not Path(self.manifest["game"]).is_absolute()
+                or not isinstance(self.manifest.get("id"), str)):
+            raise ValueError("Invalid project identity, engine or game path")
+        uuid.UUID(self.manifest["id"])
         self.target = language(self.manifest["target_language"])
         self.source = language(self.manifest["source_language"])
         database = self.directory / "project.sqlite3"
