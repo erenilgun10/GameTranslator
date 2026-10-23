@@ -10,7 +10,7 @@ def create_job(project):
     job_id, timestamp = str(uuid.uuid4()), now()
     pending = [s.id for s in project.segments() if project.translation(s.id) is None]
     with project.db:
-        project.db.execute("INSERT INTO jobs(id,target,state,created,updated) VALUES (?,?,?,?,?)",
+        project.db.execute("INSERT INTO jobs(id,target,state,created,updated,billing_complete) VALUES (?,?,?,?,?,1)",
                            (job_id, project.target, "Paused", timestamp, timestamp))
         project.db.executemany("INSERT INTO job_items(job_id,segment_id,state) VALUES (?,?,?)",
                                [(job_id, segment_id, "Pending") for segment_id in pending])
@@ -25,6 +25,8 @@ def job_report(project, job_id):
     result["items"] = [dict(r) for r in project.db.execute("SELECT segment_id,state,error,attempts FROM job_items WHERE job_id=?", (job_id,))]
     result["total"] = len(result["items"])
     result["currency_cost"] = None
+    if not result["billing_complete"]:
+        result["billed"] = None
     return result
 
 
@@ -64,7 +66,8 @@ def run_job(project, job_id, provider, cancel=None, batch_size=20, progress=None
                     raise ProviderError("Provider result count mismatch")
                 # Usage is recorded even when a paid response fails token validation.
                 with project.db:
-                    project.db.execute("UPDATE jobs SET billed=billed+? WHERE id=?", (result.billed_characters, job_id))
+                    project.db.execute("UPDATE jobs SET billed=billed+?,billing_complete=billing_complete AND ? WHERE id=?",
+                                       (result.billed_characters or 0, int(result.billed_characters is not None), job_id))
                 for segment, masked, text in zip(batch, protected, result.texts):
                     try:
                         restored = masked.restore(text)
@@ -76,6 +79,8 @@ def run_job(project, job_id, provider, cancel=None, batch_size=20, progress=None
                         with project.db:
                             project.db.execute("UPDATE job_items SET state='Failed',error='Token/translation validation failed' WHERE job_id=? AND segment_id=?", (job_id, segment.id))
             except ProviderError as exc:
+                with project.db:
+                    project.db.execute("UPDATE jobs SET billing_complete=0 WHERE id=?", (job_id,))
                 if cancel.is_set():
                     break
                 with project.db:

@@ -52,12 +52,16 @@ class Project:
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, target TEXT NOT NULL,
                 state TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0,
                 failed INTEGER NOT NULL DEFAULT 0, billed INTEGER NOT NULL DEFAULT 0,
-                created TEXT NOT NULL, updated TEXT NOT NULL);
+                created TEXT NOT NULL, updated TEXT NOT NULL,
+                billing_complete INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS job_items(job_id TEXT NOT NULL REFERENCES jobs(id),
                 segment_id TEXT NOT NULL REFERENCES segments(id), state TEXT NOT NULL,
                 error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(job_id, segment_id));
         """)
+        if "billing_complete" not in {row["name"] for row in self.db.execute("PRAGMA table_info(jobs)")}:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN billing_complete INTEGER NOT NULL DEFAULT 0")
+            self.db.commit()
 
     @classmethod
     def create(cls, directory: Path, report: ScanReport, source="EN", target="TR"):

@@ -367,10 +367,11 @@ class Desktop:
                         self.busy = False
                     if self.project and self.project.manifest["id"] == result[0]:
                         report = result[1]
-                        self.status.set(f"{report['state']} · {report['completed']}/{report['total']} · Failed {report['failed']} · Billed chars {report['billed']}")
+                        billed = report["billed"] if report["billed"] is not None else "unknown / bilinmiyor"
                         if event == "job_done":
                             self.show_report()
                             self.details.set(str({k: v for k, v in report.items() if k != "items"}))
+                        self.status.set(f"{report['state']} · {report['completed']}/{report['total']} · Failed {report['failed']} · Billed chars {billed}")
                 else:
                     self.busy = False
                     self.status.set("İşlem başarısız / Operation failed")

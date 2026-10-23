@@ -5,6 +5,7 @@ import pytest
 from game_translator.adapters import scan
 from game_translator.desktop import Desktop
 from game_translator.storage import Project
+from game_translator.jobs import create_job, job_report
 
 
 def test_desktop_renders_inventory(game):
@@ -52,6 +53,12 @@ def test_desktop_edit_filter_and_target_switch(game, tmp_path, monkeypatch):
         assert app.translation_text.get("1.0", "end-1c") == ""
         root.update_idletasks()
         assert root.winfo_reqwidth() <= 1400
+        job_id = create_job(app.project)
+        with app.project.db:
+            app.project.db.execute("UPDATE jobs SET billing_complete=0 WHERE id=?", (job_id,))
+        app.events.put(("job_done", (app.project.manifest["id"], job_report(app.project, job_id))))
+        app.poll()
+        assert "unknown / bilinmiyor" in app.status.get()
     finally:
         app.project.close()
         root.destroy()

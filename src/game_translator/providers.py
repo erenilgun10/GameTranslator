@@ -21,7 +21,7 @@ class ProviderCapabilities:
 @dataclass(frozen=True)
 class BatchResult:
     texts: list[str]
-    billed_characters: int
+    billed_characters: int | None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -50,7 +50,7 @@ class DeepLProvider:
         if not 1 <= len(texts) <= self.capabilities.max_batch:
             raise ProviderError("Batch must contain 1–50 texts")
         payload = json.dumps({"text": texts, "source_lang": source, "target_lang": target,
-                              "preserve_formatting": True}, ensure_ascii=False).encode("utf-8")
+                              "preserve_formatting": True, "show_billed_characters": True}, ensure_ascii=False).encode("utf-8")
         if len(payload) > self.capabilities.max_bytes:
             raise ProviderError("Batch exceeds request size limit")
         host = "api-free.deepl.com" if self._key.endswith(":fx") else "api.deepl.com"
@@ -72,9 +72,9 @@ class DeepLProvider:
                     raise ProviderError("Invalid provider translation count")
                 if not all(isinstance(r, dict) and isinstance(r.get("text"), str) and r["text"].strip() for r in rows):
                     raise ProviderError("Empty or malformed provider translation")
-                if not all(type(r.get("billed_characters", 0)) is int and r.get("billed_characters", 0) >= 0 for r in rows):
+                if not all("billed_characters" not in r or type(r["billed_characters"]) is int and r["billed_characters"] >= 0 for r in rows):
                     raise ProviderError("Invalid provider usage report")
-                billed = sum(r.get("billed_characters", 0) for r in rows)
+                billed = sum(r["billed_characters"] for r in rows) if all("billed_characters" in r for r in rows) else None
                 return BatchResult([r["text"] for r in rows], billed)
             except HTTPError as exc:
                 if (exc.code == 429 or 500 <= exc.code < 600) and attempt < 2:

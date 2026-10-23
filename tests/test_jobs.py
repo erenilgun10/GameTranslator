@@ -1,7 +1,7 @@
 import threading
 
 from game_translator.adapters import scan
-from game_translator.jobs import create_job, run_job
+from game_translator.jobs import create_job, job_report, run_job
 from game_translator.providers import BatchResult, ProviderCapabilities, ProviderError
 from game_translator.storage import Project
 from game_translator.tokens import protect
@@ -63,4 +63,36 @@ def test_provider_failure_and_retry_preserve_source(game, tmp_path):
     failed = run_job(project, job_id, Failing())
     assert failed["failed"] == 17 and project.progress()["Translated"] == 0
     assert run_job(project, job_id, SyntheticProvider())["completed"] == 17
+    assert job_report(project, job_id)["billed"] is None
+    project.close()
+
+
+def test_unknown_usage_preserves_translations_and_survives_reopen(game, tmp_path):
+    class Unreported(SyntheticProvider):
+        def translate_batch(self, texts, source, target, cancel):
+            return BatchResult(["[SYNTHETIC] " + t for t in texts], None)
+    directory = tmp_path / "project"
+    project = Project.create(directory, scan(game))
+    job_id = create_job(project)
+    result = run_job(project, job_id, Unreported())
+    assert result["state"] == "Completed" and result["completed"] == 17
+    assert result["billed"] is None and not result["billing_complete"]
+    project.close()
+    project = Project(directory)
+    assert job_report(project, job_id)["billed"] is None
+    assert project.progress()["Translated"] == 17
+    project.close()
+
+
+def test_legacy_job_usage_is_not_assumed_complete(game, tmp_path):
+    directory = tmp_path / "project"
+    project = Project.create(directory, scan(game))
+    job_id = create_job(project)
+    project.db.execute("ALTER TABLE jobs DROP COLUMN billing_complete")
+    project.db.commit()
+    project.close()
+    project = Project(directory)
+    assert job_report(project, job_id)["billed"] is None
+    fresh_job_id = create_job(project)
+    assert job_report(project, fresh_job_id)["billed"] == 0
     project.close()

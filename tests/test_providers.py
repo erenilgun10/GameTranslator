@@ -27,6 +27,25 @@ def test_deepl_contract_without_live_call():
     assert result.texts == ["Merhaba"] and result.billed_characters == 5
     assert opener.requests[0].full_url == "https://api-free.deepl.com/v2/translate"
     assert json.loads(opener.requests[0].data)["target_lang"] == "TR"
+    assert json.loads(opener.requests[0].data)["show_billed_characters"] is True
+
+
+def test_missing_usage_is_unknown_without_losing_valid_translation():
+    response = {"translations": [{"text": "Synthetic translation"}]}
+    result = DeepLProvider("test-only", FakeOpener(response)).translate_batch(["Hello"], "EN", "TR")
+    assert result.texts == ["Synthetic translation"] and result.billed_characters is None
+
+
+def test_partially_missing_batch_usage_is_unknown():
+    response = {"translations": [{"text": "One", "billed_characters": 3}, {"text": "Two"}]}
+    result = DeepLProvider("test-only", FakeOpener(response)).translate_batch(["One", "Two"], "EN", "TR")
+    assert result.billed_characters is None
+
+
+def test_explicit_zero_usage_is_known():
+    response = {"translations": [{"text": "Synthetic translation", "billed_characters": 0}]}
+    result = DeepLProvider("test-only", FakeOpener(response)).translate_batch(["Hello"], "EN", "TR")
+    assert result.billed_characters == 0
 
 
 @pytest.mark.parametrize("response", [[], {}, {"translations": []}, {"translations": [{"text": ""}]}])
