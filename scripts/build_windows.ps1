@@ -10,16 +10,15 @@ try {
     & $Python -m PyInstaller --noconfirm --clean --onefile --console --name GameTranslator-CLI --paths src scripts/cli_entry.py
     if ($LASTEXITCODE -ne 0) { throw 'CLI packaging failed.' }
     Copy-Item -LiteralPath 'dist/GameTranslator-CLI.exe' -Destination 'dist/GameTranslator/GameTranslator-CLI.exe' -Force
-    Copy-Item -LiteralPath 'README.md','README.tr.md','LICENSE','scripts/Install-GameTranslator.ps1' -Destination 'dist/GameTranslator' -Force
+    Copy-Item -LiteralPath 'README.md','LICENSE','scripts/Install-GameTranslator.ps1' -Destination 'dist/GameTranslator' -Force
     Copy-Item -LiteralPath 'examples' -Destination 'dist/GameTranslator/examples' -Recurse -Force
-    Copy-Item -LiteralPath 'docs' -Destination 'dist/GameTranslator/docs' -Recurse -Force
     $pythonRoot = & $Python -c 'import sys; print(sys.base_prefix)'
     $licenseDirectory = 'dist/GameTranslator/licenses'
     New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $pythonRoot 'LICENSE.txt') -Destination (Join-Path $licenseDirectory 'Python-LICENSE.txt') -Force
     $tclVersion = & $Python -c "import tkinter; t=tkinter.Tcl(); print(t.call('info', 'patchlevel'))"
     if ($LASTEXITCODE -ne 0) { throw 'Tcl runtime version detection failed.' }
-    $tclLicense = "docs/licenses/Tcl-$tclVersion-license.terms"
+    $tclLicense = "licenses/Tcl-$tclVersion-license.terms"
     if (-not (Test-Path -LiteralPath $tclLicense)) { throw "Review and add Tcl $tclVersion license before packaging." }
     Copy-Item -LiteralPath $tclLicense -Destination $licenseDirectory -Force
     Copy-Item -LiteralPath (Join-Path $pythonRoot 'tcl/tk8.6/license.terms') -Destination (Join-Path $licenseDirectory 'Tk-license.terms') -Force
